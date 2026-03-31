@@ -7,6 +7,10 @@ DB_PATH = os.getenv("DB_PATH", "magic.db")
 
 class Database:
     def __init__(self):
+        db_dir = os.path.dirname(DB_PATH)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+            
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")

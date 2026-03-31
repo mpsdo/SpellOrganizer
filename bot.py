@@ -56,18 +56,19 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
                 ephemeral=True
             )
 
-    class MesaModal(discord.ui.Modal, title="Criar Nova Mesa"):
-        rodada_id = discord.ui.TextInput(label="ID da Rodada", placeholder="Ex: 1", max_length=5)
-        nome = discord.ui.TextInput(label="Nome da Mesa", placeholder="Ex: Mesa 1")
-        players = discord.ui.TextInput(label="Jogadores (Marque com @)", style=discord.TextStyle.paragraph, placeholder="@Player1 @Player2")
+    class MesaInfoModal(discord.ui.Modal, title="Criar Nova Mesa"):
+        def __init__(self, players):
+            super().__init__()
+            self.players = players
+            self.rodada_id = discord.ui.TextInput(label="ID da Rodada", placeholder="Ex: 1", max_length=5)
+            self.nome = discord.ui.TextInput(label="Nome da Mesa", placeholder="Ex: Mesa 1")
+            self.add_item(self.rodada_id)
+            self.add_item(self.nome)
 
         async def on_submit(self, interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True)
 
-            player_ids = extrair_players(interaction.guild, self.players.value)
-            if len(player_ids) < 2:
-                await interaction.followup.send(f"❌ Encontrei menos de 2 jogadores no servidor usando os nomes informados ({self.players.value}).")
-                return
+            player_ids = [str(p.id) for p in self.players]
 
             try:
                 r_id = int(self.rodada_id.value)
@@ -119,6 +120,21 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
                 msg += f"⚠️ Falha ao enviar DM para: {', '.join(str(f) for f in falhas)} (privacidade bloqueada)"
 
             await interaction.followup.send(msg)
+
+    class SeletorPlayersView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=None)
+            self.select = discord.ui.UserSelect(
+                placeholder="Selecione de 2 a 4 jogadores para esta mesa...",
+                min_values=2,
+                max_values=4
+            )
+            self.select.callback = self.select_callback
+            self.add_item(self.select)
+
+        async def select_callback(self, interaction: discord.Interaction):
+            jogadores_marcados = self.select.values
+            await interaction.response.send_modal(MesaInfoModal(jogadores_marcados))
 
     def construir_embed_status(rodada_id: int, guild: discord.Guild) -> discord.Embed | None:
         r = db.get_rodada(rodada_id)
@@ -284,7 +300,11 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
 
         @discord.ui.button(label="🎴 Criar Mesa", style=discord.ButtonStyle.success, custom_id="btn_nova_mesa", row=0)
         async def btn_mesa(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.send_modal(MesaModal())
+            await interaction.response.send_message(
+                "🤝 **Criação de Mesa:** Selecione no menu abaixo os jogadores que vão se enfrentar (2 a 4 jogadores):",
+                view=SeletorPlayersView(),
+                ephemeral=True
+            )
 
         @discord.ui.button(label="📊 Status Dinâmico", style=discord.ButtonStyle.secondary, custom_id="btn_status", row=0)
         async def btn_status(self, interaction: discord.Interaction, button: discord.ui.Button):

@@ -1,0 +1,6 @@
+.env
+magic.db
+magic.db-shm
+magic.db-wal
+__pycache__/
+*.pyc

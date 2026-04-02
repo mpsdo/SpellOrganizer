@@ -96,7 +96,7 @@ class SeletorPlayersView(discord.ui.View):
         self.mesa_nome = mesa_nome
         self.bot_instance = bot_instance
         
-        self.user_select = discord.ui.MemberSelect(
+        self.user_select = discord.ui.UserSelect(
             placeholder="Selecione os jogadores da mesa...",
             min_values=2,
             max_values=4

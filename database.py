@@ -7,10 +7,6 @@ DB_PATH = os.getenv("DB_PATH", "magic.db")
 
 class Database:
     def __init__(self):
-        db_dir = os.path.dirname(DB_PATH)
-        if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
-            
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -183,3 +179,50 @@ class Database:
     def marcar_token_usado(self, token: str):
         self.conn.execute("UPDATE tokens SET usado=1 WHERE token=?", (token,))
         self.conn.commit()
+
+    # ── Editar Mesa ───────────────────────────────────────────────────────────
+
+    def adicionar_player_mesa(self, mesa_id: int, discord_id: str):
+        self.conn.execute(
+            "INSERT OR IGNORE INTO mesa_players (mesa_id, discord_id) VALUES (?,?)",
+            (mesa_id, discord_id)
+        )
+        self.conn.commit()
+
+    def remover_player_mesa(self, mesa_id: int, discord_id: str):
+        self.conn.execute("DELETE FROM mesa_players WHERE mesa_id=? AND discord_id=?", (mesa_id, discord_id))
+        self.conn.execute("DELETE FROM disponibilidades WHERE mesa_id=? AND discord_id=?", (mesa_id, discord_id))
+        self.conn.execute("DELETE FROM tokens WHERE mesa_id=? AND discord_id=?", (mesa_id, discord_id))
+        self.conn.commit()
+
+    # ── Retry / Revotar ───────────────────────────────────────────────────────
+
+    def limpar_disponibilidades_mesa(self, mesa_id: int):
+        self.conn.execute("DELETE FROM disponibilidades WHERE mesa_id=?", (mesa_id,))
+        self.conn.commit()
+
+    def resetar_tokens_mesa(self, mesa_id: int):
+        self.conn.execute("DELETE FROM tokens WHERE mesa_id=?", (mesa_id,))
+        self.conn.commit()
+
+    def get_outros_votos_mesa(self, mesa_id: int, discord_id: str) -> dict:
+        """Retorna contagem agregada de slots votados por OUTROS players da mesa."""
+        import json
+        rows = self.conn.execute(
+            "SELECT slots FROM disponibilidades WHERE mesa_id=? AND discord_id!=?",
+            (mesa_id, discord_id)
+        ).fetchall()
+        contagem = {}
+        for r in rows:
+            for s in json.loads(r["slots"]):
+                contagem[s] = contagem.get(s, 0) + 1
+        return contagem
+
+    def contar_outros_votos_mesa(self, mesa_id: int, discord_id: str) -> int:
+        """Conta quantos OUTROS players já enviaram disponibilidade."""
+        row = self.conn.execute(
+            "SELECT COUNT(DISTINCT discord_id) as c FROM disponibilidades WHERE mesa_id=? AND discord_id!=?",
+            (mesa_id, discord_id)
+        ).fetchone()
+        return row["c"] if row else 0
+

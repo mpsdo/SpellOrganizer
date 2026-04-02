@@ -56,19 +56,18 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
                 ephemeral=True
             )
 
-    class MesaInfoModal(discord.ui.Modal, title="Criar Nova Mesa"):
-        def __init__(self, players):
-            super().__init__()
-            self.players = players
-            self.rodada_id = discord.ui.TextInput(label="ID da Rodada", placeholder="Ex: 1", max_length=5)
-            self.nome = discord.ui.TextInput(label="Nome da Mesa", placeholder="Ex: Mesa 1")
-            self.add_item(self.rodada_id)
-            self.add_item(self.nome)
+    class MesaModal(discord.ui.Modal, title="Criar Nova Mesa"):
+        rodada_id = discord.ui.TextInput(label="ID da Rodada", placeholder="Ex: 1", max_length=5)
+        nome = discord.ui.TextInput(label="Nome da Mesa", placeholder="Ex: Mesa 1")
+        players = discord.ui.TextInput(label="Jogadores (Marque com @)", style=discord.TextStyle.paragraph, placeholder="@Player1 @Player2")
 
         async def on_submit(self, interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True)
 
-            player_ids = [str(p.id) for p in self.players]
+            player_ids = extrair_players(interaction.guild, self.players.value)
+            if len(player_ids) < 2:
+                await interaction.followup.send(f"❌ Encontrei menos de 2 jogadores no servidor usando os nomes informados ({self.players.value}).")
+                return
 
             try:
                 r_id = int(self.rodada_id.value)
@@ -120,21 +119,6 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
                 msg += f"⚠️ Falha ao enviar DM para: {', '.join(str(f) for f in falhas)} (privacidade bloqueada)"
 
             await interaction.followup.send(msg)
-
-    class SeletorPlayersView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=None)
-            self.select = discord.ui.UserSelect(
-                placeholder="Selecione de 2 a 4 jogadores para esta mesa...",
-                min_values=2,
-                max_values=4
-            )
-            self.select.callback = self.select_callback
-            self.add_item(self.select)
-
-        async def select_callback(self, interaction: discord.Interaction):
-            jogadores_marcados = self.select.values
-            await interaction.response.send_modal(MesaInfoModal(jogadores_marcados))
 
     def construir_embed_status(rodada_id: int, guild: discord.Guild) -> discord.Embed | None:
         r = db.get_rodada(rodada_id)
@@ -284,6 +268,161 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
             else:
                 await interaction.response.send_message("❌ Formatação cancelada. A palavra descrita não era idêntica a 'APAGAR'.", ephemeral=True)
 
+    class EditarMesaModal(discord.ui.Modal, title="Editar Mesa"):
+        mesa_id_input = discord.ui.TextInput(label="ID da Mesa", placeholder="Ex: 1", max_length=5)
+
+        async def on_submit(self, interaction: discord.Interaction):
+            try:
+                m_id = int(self.mesa_id_input.value)
+            except ValueError:
+                await interaction.response.send_message("❌ ID deve ser número.", ephemeral=True)
+                return
+
+            mesa = db.get_mesa(m_id)
+            if not mesa:
+                await interaction.response.send_message("❌ Mesa não encontrada.", ephemeral=True)
+                return
+
+            rodada = db.get_rodada(mesa["rodada_id"])
+            players = db.get_players_mesa(m_id)
+
+            linhas = []
+            for pid in players:
+                member = interaction.guild.get_member(int(pid)) if interaction.guild else None
+                nome = member.display_name if member else f"<@{pid}>"
+                linhas.append(f"• {nome}")
+
+            txt_players = "\n".join(linhas) if linhas else "Nenhum jogador."
+
+            embed = discord.Embed(
+                title=f"✏️ Editar {mesa['nome']}",
+                description=(
+                    f"**Rodada:** {rodada['nome']}\n"
+                    f"**Status:** {'🔒 Confirmada' if mesa['confirmada'] else '⏳ Aberta'}\n\n"
+                    f"**Jogadores atuais ({len(players)}):**\n{txt_players}"
+                ),
+                color=0x5865F2
+            )
+
+            await interaction.response.send_message(
+                embed=embed,
+                view=EditarMesaView(m_id, mesa['nome'], mesa['rodada_id']),
+                ephemeral=True
+            )
+
+    class EditarMesaView(discord.ui.View):
+        def __init__(self, mesa_id: int, mesa_nome: str, rodada_id: int):
+            super().__init__(timeout=None)
+            self.mesa_id = mesa_id
+            self.mesa_nome = mesa_nome
+            self.rodada_id = rodada_id
+
+        @discord.ui.button(label="➕ Adicionar Jogador", style=discord.ButtonStyle.success)
+        async def btn_add(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await interaction.response.send_message(
+                f"👇 Selecione o jogador para adicionar à **{self.mesa_nome}**:",
+                view=AdicionarPlayerView(self.mesa_id, self.mesa_nome, self.rodada_id),
+                ephemeral=True
+            )
+
+        @discord.ui.button(label="➖ Remover Jogador", style=discord.ButtonStyle.danger)
+        async def btn_remove(self, interaction: discord.Interaction, button: discord.ui.Button):
+            players = db.get_players_mesa(self.mesa_id)
+            if not players:
+                await interaction.response.send_message("❌ Nenhum jogador na mesa.", ephemeral=True)
+                return
+
+            options = []
+            for pid in players:
+                member = interaction.guild.get_member(int(pid)) if interaction.guild else None
+                nome = member.display_name if member else pid
+                options.append(discord.SelectOption(label=nome, value=pid))
+
+            await interaction.response.send_message(
+                f"👇 Selecione o jogador para remover da **{self.mesa_nome}**:",
+                view=RemoverPlayerView(self.mesa_id, self.mesa_nome, options),
+                ephemeral=True
+            )
+
+    class AdicionarPlayerView(discord.ui.View):
+        def __init__(self, mesa_id: int, mesa_nome: str, rodada_id: int):
+            super().__init__(timeout=None)
+            self.mesa_id = mesa_id
+            self.mesa_nome = mesa_nome
+            self.rodada_id = rodada_id
+            self.select = discord.ui.UserSelect(
+                placeholder="Selecione o jogador...",
+                min_values=1,
+                max_values=1
+            )
+            self.select.callback = self.select_callback
+            self.add_item(self.select)
+
+        async def select_callback(self, interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            member = self.select.values[0]
+            pid = str(member.id)
+
+            players = db.get_players_mesa(self.mesa_id)
+            if pid in players:
+                await interaction.followup.send(f"⚠️ **{member.display_name}** já está nesta mesa.", ephemeral=True)
+                return
+
+            db.adicionar_player_mesa(self.mesa_id, pid)
+
+            rodada = db.get_rodada(self.rodada_id)
+            token = db.criar_token(pid, self.mesa_id, self.rodada_id)
+            link = f"{BASE_URL}/disponibilidade/{token}"
+
+            outros = []
+            for p in db.get_players_mesa(self.mesa_id):
+                if p != pid:
+                    m = interaction.guild.get_member(int(p))
+                    if m:
+                        outros.append(m.display_name)
+
+            try:
+                await member.send(
+                    f"⚔️ **Magic Tournament — {rodada['nome']}**\n\n"
+                    f"Você foi adicionado à **{self.mesa_nome}** junto com: **{', '.join(outros)}**\n\n"
+                    f"📅 A rodada vai de **{rodada['data_ini']}** até **{rodada['data_fim']}**\n\n"
+                    f"Marque seus horários disponíveis clicando no link abaixo:\n"
+                    f"🔗 {link}\n\n"
+                    f"_O link é pessoal, não compartilhe com ninguém._"
+                )
+                await interaction.followup.send(
+                    f"✅ **{member.display_name}** adicionado à **{self.mesa_nome}** e notificado por DM!",
+                    ephemeral=True
+                )
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    f"✅ **{member.display_name}** adicionado à **{self.mesa_nome}**, mas não foi possível enviar DM (privacidade bloqueada).",
+                    ephemeral=True
+                )
+
+    class RemoverPlayerSelect(discord.ui.Select):
+        def __init__(self, mesa_id: int, mesa_nome: str, options: list):
+            super().__init__(placeholder="Selecione o jogador para remover...", options=options)
+            self.mesa_id = mesa_id
+            self.mesa_nome = mesa_nome
+
+        async def callback(self, interaction: discord.Interaction):
+            pid = self.values[0]
+            member = interaction.guild.get_member(int(pid)) if interaction.guild else None
+            nome = member.display_name if member else pid
+
+            db.remover_player_mesa(self.mesa_id, pid)
+
+            await interaction.response.send_message(
+                f"✅ **{nome}** removido da **{self.mesa_nome}**! (votos e tokens apagados)",
+                ephemeral=True
+            )
+
+    class RemoverPlayerView(discord.ui.View):
+        def __init__(self, mesa_id: int, mesa_nome: str, options: list):
+            super().__init__(timeout=None)
+            self.add_item(RemoverPlayerSelect(mesa_id, mesa_nome, options))
+
     class PainelView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=None)
@@ -300,11 +439,7 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
 
         @discord.ui.button(label="🎴 Criar Mesa", style=discord.ButtonStyle.success, custom_id="btn_nova_mesa", row=0)
         async def btn_mesa(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.send_message(
-                "🤝 **Criação de Mesa:** Selecione no menu abaixo os jogadores que vão se enfrentar (2 a 4 jogadores):",
-                view=SeletorPlayersView(),
-                ephemeral=True
-            )
+            await interaction.response.send_modal(MesaModal())
 
         @discord.ui.button(label="📊 Status Dinâmico", style=discord.ButtonStyle.secondary, custom_id="btn_status", row=0)
         async def btn_status(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -313,6 +448,10 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
                 await interaction.response.send_message("❌ Nenhuma rodada encontrada no sistema.", ephemeral=True)
                 return
             await interaction.response.send_message("👇 Selecione qual rodada deseja acompanhar nos bastidores:", view=SeletorRodadaView(rodadas[:25]), ephemeral=True)
+
+        @discord.ui.button(label="✏️ Editar Mesa", style=discord.ButtonStyle.secondary, custom_id="btn_editar_mesa", row=1)
+        async def btn_editar_mesa(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await interaction.response.send_modal(EditarMesaModal())
 
         @discord.ui.button(label="🗑️ Apagar Rodada", style=discord.ButtonStyle.danger, custom_id="btn_apagar_rodada", row=1)
         async def btn_apagar_rodada(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -350,7 +489,7 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
                         "🏆 **Criar Rodada:** Comece uma nova etapa do torneio.\n"
                         "🎴 **Criar Mesa:** Associe jogadores para votarem juntos em horários.\n"
                         "📊 **Status:** Veja exatamente quem já escolheu.\n"
-                        "🔗 **Reenviar Link:** Salve quem perdeu o link nas Mensagens Diretas.",
+                        "✏️ **Editar Mesa:** Adicione ou remova jogadores de uma mesa existente.",
             color=discord.Color.dark_theme()
         )
         await interaction.response.send_message(embed=embed, view=PainelView())
@@ -398,6 +537,70 @@ class ConfirmarHorarioView(discord.ui.View):
                             pass
         return callback
 
+
+class RetryMesaView(discord.ui.View):
+    def __init__(self, bot_instance, mesa_id: int, rodada_nome: str, mesa_nome: str, players: list):
+        super().__init__(timeout=None)
+        self.bot_instance = bot_instance
+        self.mesa_id = mesa_id
+        self.rodada_nome = rodada_nome
+        self.mesa_nome = mesa_nome
+        self.players = players
+
+    @discord.ui.button(label="🔄 Revotar Mesa", style=discord.ButtonStyle.primary)
+    async def btn_retry(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
+        db.limpar_disponibilidades_mesa(self.mesa_id)
+        db.resetar_tokens_mesa(self.mesa_id)
+
+        mesa = db.get_mesa(self.mesa_id)
+        rodada = db.get_rodada(mesa["rodada_id"])
+
+        guild = self.bot_instance.guilds[0] if self.bot_instance.guilds else None
+        notificados, falhas = [], []
+
+        for pid in self.players:
+            member = guild.get_member(int(pid)) if guild else None
+            if not member:
+                falhas.append(pid)
+                continue
+
+            token = db.criar_token(pid, self.mesa_id, mesa["rodada_id"])
+            link = f"{BASE_URL}/disponibilidade/{token}"
+
+            outros = [
+                guild.get_member(int(p)).display_name
+                for p in self.players
+                if p != pid and guild.get_member(int(p))
+            ]
+
+            try:
+                await member.send(
+                    f"🔄 **Segunda Chamada — {self.mesa_nome}**\n\n"
+                    f"Os horários que vocês marcaram infelizmente **não bateram** com os de: **{', '.join(outros)}** 😔\n\n"
+                    f"O organizador está pedindo uma **nova votação**. "
+                    f"Desta vez, tente expandir ao máximo seus horários disponíveis para aumentar as chances de Match!\n\n"
+                    f"💡 _Dica: Conforme seus adversários votarem, você verá os horários deles no calendário!_\n\n"
+                    f"🔗 {link}"
+                )
+                notificados.append(member.display_name)
+            except discord.Forbidden:
+                falhas.append(member.display_name if member else pid)
+
+        button.disabled = True
+        button.label = "✅ Revotação Enviada"
+        button.style = discord.ButtonStyle.secondary
+        await interaction.message.edit(view=self)
+
+        msg = f"✅ **Revotação iniciada para {self.mesa_nome}!**\n"
+        if notificados:
+            msg += f"📨 Novos links enviados para: {', '.join(notificados)}\n"
+        if falhas:
+            msg += f"⚠️ Falha ao enviar para: {', '.join(str(f) for f in falhas)}"
+        await interaction.followup.send(msg)
+
+
 async def verificar_mesa(bot: commands.Bot, mesa_id: int):
     """Chamado pela API após salvar disponibilidade. Verifica se todos responderam."""
     players = db.get_players_mesa(mesa_id)
@@ -439,11 +642,14 @@ async def verificar_mesa(bot: commands.Bot, mesa_id: int):
                         pass
                 else:
                     try:
+                        view = RetryMesaView(bot, mesa_id, rodada['nome'], mesa['nome'], players)
                         await member.send(
                             f"⚠️ **Aviso de Choque de Horários:** A **{mesa['nome']}** fechou os votos, mas...\n"
                             f"Os horários marcados por eles não deram 'Match' em dia e horário nenhum.\n\n"
                             f"**Respostas isoladas:**\n{resumo}\n\n"
-                            f"Chame os dois de canto no privado e negociem o dia manualmente!"
+                            f"Clique no botão abaixo para iniciar uma **revotação** — os jogadores receberão novos links "
+                            f"e poderão ver os horários dos adversários no calendário!",
+                            view=view
                         )
                     except discord.Forbidden:
                         pass

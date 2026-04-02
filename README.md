@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-# SpellOrganizer
-=======
 # ⚔️ Magic Tournament Bot
 
 Bot Discord + calendário web para organizar horários de torneios de Magic: The Gathering.
@@ -124,4 +121,3 @@ magic-bot/
 | `GET` | `/disponibilidade/{token}` | Página do calendário para o player |
 | `POST` | `/disponibilidade/{token}` | Salva disponibilidade `{"slots": ["1,40", "1,41"]}` |
 | `GET` | `/health` | Status do serviço |
->>>>>>> 697896e (feat: Painel administrativo, calendário dinâmico e melhorias de UX)

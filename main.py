@@ -43,6 +43,7 @@ class DisponibilidadePayload(BaseModel):
 
 @app.get("/disponibilidade/{token}", response_class=HTMLResponse)
 async def pagina_disponibilidade(token: str):
+    import json as _json
     info = db.get_token(token)
     if not info:
         return HTMLResponse("<h2>Link inválido ou já utilizado.</h2>", status_code=404)
@@ -53,12 +54,20 @@ async def pagina_disponibilidade(token: str):
     data_ini = rodada.get("data_ini", "")
     data_fim = rodada.get("data_fim", "")
 
+    outros_votos = db.get_outros_votos_mesa(info["mesa_id"], info["discord_id"])
+    outros_votos_json = _json.dumps(outros_votos)
+    total_outros = len(db.get_players_mesa(info["mesa_id"])) - 1
+    outros_votaram = db.contar_outros_votos_mesa(info["mesa_id"], info["discord_id"])
+
     html = _render_calendar_page(
         token=token,
         rodada_nome=rodada["nome"],
         mesa_nome=mesa["nome"],
         data_ini=data_ini,
         data_fim=data_fim,
+        outros_votos_json=outros_votos_json,
+        total_outros=total_outros,
+        outros_votaram=outros_votaram,
     )
     return HTMLResponse(html)
 
@@ -91,7 +100,8 @@ async def health():
 
 # ── Calendar page renderer ────────────────────────────────────────────────────
 
-def _render_calendar_page(token: str, rodada_nome: str, mesa_nome: str, data_ini: str, data_fim: str) -> str:
+def _render_calendar_page(token: str, rodada_nome: str, mesa_nome: str, data_ini: str, data_fim: str,
+                          outros_votos_json: str = '{}', total_outros: int = 0, outros_votaram: int = 0) -> str:
     periodo = f"{data_ini} – {data_fim}" if data_ini and data_fim else ""
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -114,8 +124,14 @@ def _render_calendar_page(token: str, rodada_nome: str, mesa_nome: str, data_ini
   .time-label {{ font-size: 10px; color: #555; height: 22px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #1e1e2e; flex-shrink: 0; white-space: nowrap; }}
   .slot {{ height: 22px; border-bottom: 1px solid #1e1e2e; cursor: pointer; transition: background 0.08s; flex-shrink: 0; }}
   .slot:hover {{ background: #2a3a5a; }}
-  .slot.selected {{ background: #2563eb; }}
-  .slot.selected:hover {{ background: #1d4ed8; }}
+  .slot[data-heat="low"] {{ background: rgba(56, 189, 248, 0.10); }}
+  .slot[data-heat="mid"] {{ background: rgba(52, 211, 153, 0.15); }}
+  .slot[data-heat="high"] {{ background: rgba(52, 211, 153, 0.25); box-shadow: inset 0 0 0 1px rgba(52,211,153,0.25); }}
+  .slot[data-heat="low"]:hover:not(.selected) {{ background: rgba(56, 189, 248, 0.18); }}
+  .slot[data-heat="mid"]:hover:not(.selected) {{ background: rgba(52, 211, 153, 0.25); }}
+  .slot[data-heat="high"]:hover:not(.selected) {{ background: rgba(52, 211, 153, 0.38); }}
+  .slot.selected {{ background: #2563eb !important; }}
+  .slot.selected:hover {{ background: #1d4ed8 !important; }}
   .footer {{ margin-top: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }}
   .count {{ font-size: 13px; color: #888; }}
   .count strong {{ color: #5b8dee; }}
@@ -125,6 +141,11 @@ def _render_calendar_page(token: str, rodada_nome: str, mesa_nome: str, data_ini
   .hint {{ font-size: 12px; color: #555; margin-top: 8px; }}
   .toast {{ display: none; margin-top: 16px; padding: 14px 18px; background: #1a2e1a; border: 1px solid #2d5a2d; border-radius: 8px; font-size: 14px; color: #5cbf5c; }}
   .error {{ display: none; margin-top: 16px; padding: 14px 18px; background: #2e1a1a; border: 1px solid #5a2d2d; border-radius: 8px; font-size: 14px; color: #bf5c5c; }}
+  .legend {{ display: flex; gap: 12px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }}
+  .legend-item {{ display: flex; align-items: center; gap: 5px; font-size: 11px; color: #777; }}
+  .legend-swatch {{ width: 16px; height: 12px; border-radius: 3px; border: 1px solid #2a2a3a; }}
+  .status-bar {{ display: flex; align-items: center; gap: 8px; margin-bottom: 14px; padding: 10px 14px; background: #161625; border-radius: 8px; border: 1px solid #2a2a3a; font-size: 12px; color: #888; }}
+  .status-count {{ color: #5b8dee; font-weight: 600; }}
 </style>
 </head>
 <body>
@@ -132,6 +153,17 @@ def _render_calendar_page(token: str, rodada_nome: str, mesa_nome: str, data_ini
   <h1>⚔️ {rodada_nome} — {mesa_nome}</h1>
   <div class="subtitle">Marque todos os horários que você pode jogar</div>
   <div class="periodo">📅 {periodo}</div>
+
+  <div class="status-bar" id="statusBar">
+    ⏳ Votos dos adversários: <span class="status-count" id="votosCount">{outros_votaram}/{total_outros}</span>
+  </div>
+
+  <div class="legend" id="legend" style="display:none">
+    <span class="legend-item"><span class="legend-swatch" style="background:#2563eb"></span> Sua seleção</span>
+    <span class="legend-item"><span class="legend-swatch" style="background:rgba(56,189,248,0.2)"></span> 1 adversário</span>
+    <span class="legend-item"><span class="legend-swatch" style="background:rgba(52,211,153,0.25)"></span> 2+ adversários</span>
+    <span class="legend-item"><span class="legend-swatch" style="background:rgba(52,211,153,0.4);box-shadow:inset 0 0 0 1px rgba(52,211,153,0.4)"></span> Todos disponíveis</span>
+  </div>
 
   <div class="cal-wrapper">
     <div class="cal" id="cal"></div>
@@ -154,6 +186,10 @@ const DAYS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 const SLOTS = 48;
 let selected = new Set();
 let dragging = false, dragMode = null;
+
+const OUTROS_VOTOS = {outros_votos_json};
+const TOTAL_OUTROS = {total_outros};
+const OUTROS_VOTARAM = {outros_votaram};
 
 function slotLabel(s) {{
   const h = String(Math.floor(s/2)).padStart(2,'0');
@@ -279,7 +315,22 @@ async function confirmar(){{
   }}
 }}
 
+function applyHeatmap() {{
+  if (TOTAL_OUTROS === 0) return;
+  document.getElementById('legend').style.display = 'flex';
+  for (const [k, count] of Object.entries(OUTROS_VOTOS)) {{
+    const el = document.getElementById(k);
+    if (!el || el.classList.contains('past')) continue;
+    const ratio = count / TOTAL_OUTROS;
+    if (ratio >= 1) el.dataset.heat = 'high';
+    else if (ratio >= 0.5) el.dataset.heat = 'mid';
+    else el.dataset.heat = 'low';
+    el.title = count + ' de ' + TOTAL_OUTROS + ' adversário(s) disponível(is) aqui';
+  }}
+}}
+
 buildCal();
+applyHeatmap();
 </script>
 </body>
 </html>"""

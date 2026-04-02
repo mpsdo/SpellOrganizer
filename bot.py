@@ -276,6 +276,14 @@ class PainelView(discord.ui.View):
             return
         await interaction.response.send_message("Selecione a rodada:", view=SeletorRodadaView(rodadas), ephemeral=True)
 
+    @discord.ui.button(label="👥 Editar Jogadores", style=discord.ButtonStyle.secondary, row=1)
+    async def btn_editar_jogadores(self, interaction: discord.Interaction, button: discord.ui.Button):
+        rodadas = db.get_todas_rodadas()
+        if not rodadas:
+            await interaction.response.send_message("❌ Nenhuma rodada ativa.", ephemeral=True)
+            return
+        await interaction.response.send_message("Selecione a Rodada da mesa:", view=SeletorRodadaEdicaoView(rodadas, self.bot), ephemeral=True)
+
     @discord.ui.button(label="☢️ NUCLEAR RESET", style=discord.ButtonStyle.danger, row=1)
     async def btn_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
@@ -283,6 +291,115 @@ class PainelView(discord.ui.View):
             return
         db.resetar_banco()
         await interaction.response.send_message("💥 Banco de dados resetado com sucesso!", ephemeral=True)
+
+
+# ─── NOVAS CLASSES DE EDIÇÃO ───
+
+class SeletorRodadaEdicaoSelect(discord.ui.Select):
+    def __init__(self, rodadas, bot_instance):
+        self.bot_instance = bot_instance
+        options = [discord.SelectOption(label=r['nome'], value=str(r['id'])) for r in rodadas]
+        super().__init__(placeholder="Escolha a rodada da mesa...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        rodada_id = int(self.values[0])
+        mesas = db.get_mesas_rodada(rodada_id)
+        if not mesas:
+            await interaction.followup.send("❌ Essa rodada não tem mesas.", ephemeral=True)
+            return
+        await interaction.followup.send("Agora, escolha a mesa:", view=SeletorMesaEdicaoView(mesas, self.bot_instance), ephemeral=True)
+
+class SeletorRodadaEdicaoView(discord.ui.View):
+    def __init__(self, rodadas, bot_instance):
+        super().__init__(timeout=None)
+        self.add_item(SeletorRodadaEdicaoSelect(rodadas, bot_instance))
+
+class SeletorMesaEdicaoSelect(discord.ui.Select):
+    def __init__(self, mesas, bot_instance):
+        self.bot_instance = bot_instance
+        options = [discord.SelectOption(label=m['nome'], value=str(m['id'])) for m in mesas]
+        super().__init__(placeholder="Selecione a mesa para editar...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        mesa_id = int(self.values[0])
+        mesa = db.get_mesa(mesa_id)
+        players = db.get_players_mesa(mesa_id)
+        
+        nomes = []
+        for pid in players:
+            m = interaction.guild.get_member(int(pid))
+            nomes.append(m.display_name if m else pid)
+
+        msg = f"⚙️ **Gerenciando: {mesa['nome']}**\n👤 Jogadores Atuais: {', '.join(nomes)}"
+        await interaction.followup.send(msg, view=GerenciarPlayersView(mesa_id, self.bot_instance), ephemeral=True)
+
+class SeletorMesaEdicaoView(discord.ui.View):
+    def __init__(self, mesas, bot_instance):
+        super().__init__(timeout=None)
+        self.add_item(SeletorMesaEdicaoSelect(mesas, bot_instance))
+
+class GerenciarPlayersView(discord.ui.View):
+    def __init__(self, mesa_id: int, bot_instance):
+        super().__init__(timeout=None)
+        self.mesa_id = mesa_id
+        self.bot = bot_instance
+
+    @discord.ui.button(label="➕ Adicionar Jogador", style=discord.ButtonStyle.success)
+    async def btn_add(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = discord.ui.View()
+        sel = discord.ui.UserSelect(placeholder="Selecione o novo jogador...", min_values=1, max_values=1)
+        
+        async def add_cb(inter: discord.Interaction):
+            await inter.response.defer(ephemeral=True)
+            u = sel.values[0]
+            db.adicionar_player_mesa(self.mesa_id, str(u.id))
+            
+            # Avisa o novo player
+            mesa = db.get_mesa(self.mesa_id)
+            rodada = db.get_rodada(mesa["rodada_id"])
+            token = db.criar_token(str(u.id), self.mesa_id, mesa["rodada_id"])
+            link = f"{BASE_URL}/disponibilidade/{token}"
+            
+            try:
+                await u.send(
+                    f"⚔️ **Novo Convite — {mesa['nome']}**\n"
+                    f"Você foi adicionado à rodada **{rodada['nome']}**.\n\n"
+                    f"Marque seus horários aqui:\n🔗 {link}"
+                )
+            except: pass
+            await inter.followup.send(f"✅ {u.display_name} adicionado à mesa!", ephemeral=True)
+
+        sel.callback = add_cb
+        view.add_item(sel)
+        await interaction.response.send_message("Escolha o jogador para ADICIONAR:", view=view, ephemeral=True)
+
+    @discord.ui.button(label="➖ Remover Jogador", style=discord.ButtonStyle.danger)
+    async def btn_rem(self, interaction: discord.Interaction, button: discord.ui.Button):
+        players_ids = db.get_players_mesa(self.mesa_id)
+        if not players_ids:
+            await interaction.response.send_message("❌ Nenhum jogador nesta mesa.", ephemeral=True)
+            return
+
+        options = []
+        for pid in players_ids:
+            m = interaction.guild.get_member(int(pid))
+            name = m.display_name if m else pid
+            options.append(discord.SelectOption(label=name, value=str(pid)))
+
+        view = discord.ui.View()
+        sel = discord.ui.Select(placeholder="Selecione quem REMOVER...", options=options)
+
+        async def rem_cb(inter: discord.Interaction):
+            await inter.response.defer(ephemeral=True)
+            target_id = sel.values[0]
+            db.remover_player_mesa(self.mesa_id, target_id)
+            await inter.followup.send(f"✅ Jogador removido da mesa.", ephemeral=True)
+
+        sel.callback = rem_cb
+        view.add_item(sel)
+        await interaction.response.send_message("Escolha o jogador para REMOVER:", view=view, ephemeral=True)
 
 # ─── FUNÇÕES AUXILIARES ───
 

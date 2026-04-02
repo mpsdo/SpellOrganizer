@@ -56,28 +56,37 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
                 ephemeral=True
             )
 
-    class MesaInputsModal(discord.ui.Modal, title="Informações da Mesa"):
-        rodada_id = discord.ui.TextInput(label="ID da Rodada", placeholder="Ex: 1", max_length=5)
-        mesa_nome = discord.ui.TextInput(label="Nome da Mesa", placeholder="Ex: Mesa 1", max_length=50)
+    class SeletorRodadaCriacaoSelect(discord.ui.Select):
+        def __init__(self, rodadas):
+            options = []
+            for r in rodadas:
+                options.append(discord.SelectOption(
+                    label=f"Rodada: {r['nome']}", 
+                    description=f"ID {r['id']} | {r['data_ini']} a {r['data_fim']}", 
+                    value=str(r['id'])
+                ))
+            super().__init__(placeholder="Selecione a rodada para esta mesa...", options=options)
 
-        async def on_submit(self, interaction: discord.Interaction):
-            try:
-                r_id = int(self.rodada_id.value)
-            except ValueError:
-                await interaction.response.send_message("❌ O ID da rodada deve ser um número.", ephemeral=True)
-                return
-
-            rodada = db.get_rodada(r_id)
-            if not rodada:
-                await interaction.response.send_message("❌ Rodada não encontrada.", ephemeral=True)
-                return
+        async def callback(self, interaction: discord.Interaction):
+            rodada_id = int(self.values[0])
+            rodada = db.get_rodada(rodada_id)
+            
+            # Auto-gerar nome da mesa baseado no contador atual da rodada
+            mesas = db.get_mesas_rodada(rodada_id)
+            proxima_num = len(mesas) + 1
+            mesa_nome = f"Mesa {proxima_num}"
 
             await interaction.response.send_message(
-                f"🤝 **Criando {self.mesa_nome.value}** em **{rodada['nome']}**\n"
-                f"👇 Use o menu abaixo para selecionar os jogadores desta mesa (2 a 4 players):",
-                view=SeletorPlayersView(r_id, self.mesa_nome.value, bot),
+                f"🤝 **Criando {mesa_nome}** em **{rodada['nome']}**\n"
+                f"👇 Use o menu abaixo para selecionar os jogadores (2 a 4 players):",
+                view=SeletorPlayersView(rodada_id, mesa_nome, bot),
                 ephemeral=True
             )
+
+    class SeletorRodadaCriacaoView(discord.ui.View):
+        def __init__(self, rodadas):
+            super().__init__(timeout=None)
+            self.add_item(SeletorRodadaCriacaoSelect(rodadas))
 
     class SeletorPlayersView(discord.ui.View):
         def __init__(self, rodada_id: int, mesa_nome: str, bot_instance):
@@ -99,10 +108,9 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
             members = self.user_select.values
             ids = [str(m.id) for m in members]
 
-            # Criar mesa no banco
-            m_id = db.criar_mesa(self.mesa_nome, self.rodada_id, ids)
+            # CORREÇÃO: Ordem correta dos argumentos (rodada_id, mesa_nome, ids)
+            m_id = db.criar_mesa(self.rodada_id, self.mesa_nome, ids)
             
-            # Criar tokens e enviar DMs
             rodada = db.get_rodada(self.rodada_id)
             base_msg = (
                 f"⚔️ **Magic Tournament — {rodada['nome']}**\n\n"
@@ -448,7 +456,11 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
 
         @discord.ui.button(label="🎴 Criar Mesa", style=discord.ButtonStyle.success, custom_id="btn_nova_mesa", row=0)
         async def btn_mesa(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.send_modal(MesaInputsModal())
+            rodadas = db.get_todas_rodadas()
+            if not rodadas:
+                await interaction.response.send_message("❌ Nenhuma rodada encontrada. Crie uma rodada primeiro!", ephemeral=True)
+                return
+            await interaction.response.send_message("👇 Primeiro, selecione para qual **Rodada** deseja criar esta mesa:", view=SeletorRodadaCriacaoView(rodadas[:25]), ephemeral=True)
 
         @discord.ui.button(label="📊 Status Dinâmico", style=discord.ButtonStyle.secondary, custom_id="btn_status", row=0)
         async def btn_status(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -635,32 +647,49 @@ async def verificar_mesa(bot: commands.Bot, mesa_id: int):
     resumo = formatar_disponibilidades(disponibilidades, guild_members)
     
     if guild:
-        for member in guild.members:
-            if member.guild_permissions.administrator and not member.bot:
-                if opcoes:
-                    try:
-                        view = ConfirmarHorarioView(bot, mesa_id, opcoes, rodada['nome'], mesa['nome'], players)
-                        await member.send(
-                            f"🔔 **Ação Necessária:** A **{mesa['nome']}** marcou todos os votos!\n\n"
-                            f"Cruzei as disposições e encontrei {len(opcoes)} opção(ões) de horários perfeitamente alinhadas entre eles. "
-                            f"Como você é o Juíz/Organizador, **clique no botão** da sua escolha abaixo para decretar o horário oficial e eu avisarei os combatentes automaticamente!\n\n"
-                            f"**Visão das respostas originais enviadas:**\n{resumo}",
-                            view=view
-                        )
-                    except discord.Forbidden:
-                        pass
-                else:
-                    try:
-                        view = RetryMesaView(bot, mesa_id, rodada['nome'], mesa['nome'], players)
-                        await member.send(
-                            f"⚠️ **Aviso de Choque de Horários:** A **{mesa['nome']}** fechou os votos, mas...\n"
-                            f"Os horários marcados por eles não deram 'Match' em dia e horário nenhum.\n\n"
-                            f"**Respostas isoladas:**\n{resumo}\n\n"
-                            f"Clique no botão abaixo para iniciar uma **revotação** — os jogadores receberão novos links "
-                            f"e poderão ver os horários dos adversários no calendário!",
-                            view=view
-                        )
-                    except discord.Forbidden:
-                        pass
-                break # Envia sempre pro primeiro administrador logado que der sucesso na DM
+        # Tenta pegar quem tem perms de admin de forma mais robusta (fallback pro owner se cache tiver zerado)
+        admins = [m for m in guild.members if m.guild_permissions.administrator and not m.bot]
+        
+        if not admins:
+            # Se cache estiver vazio, tenta dar um fetch rápido ou apenas usa o owner da aplicação
+            try:
+                # O fetch_members(limit=10) é só pra pegar os primeiros pra ver se acha admin rápido
+                async for m in guild.fetch_members(limit=100):
+                    if m.guild_permissions.administrator and not m.bot:
+                        admins.append(m)
+            except: pass
+
+        if not admins:
+            # Fallback final: tenta o owner do bot
+            owner = (await bot.application_info()).owner
+            admins = [owner]
+
+        for member in admins:
+            if opcoes:
+                try:
+                    view = ConfirmarHorarioView(bot, mesa_id, opcoes, rodada['nome'], mesa['nome'], players)
+                    await member.send(
+                        f"🔔 **Ação Necessária:** A **{mesa['nome']}** marcou todos os votos!\n\n"
+                        f"Cruzei as disposições e encontrei {len(opcoes)} opção(ões) de horários perfeitamente alinhadas entre eles. "
+                        f"Como você é o Juíz/Organizador, **clique no botão** da sua escolha abaixo para decretar o horário oficial e eu avisarei os combatentes automaticamente!\n\n"
+                        f"**Visão das respostas originais enviadas:**\n{resumo}",
+                        view=view
+                    )
+                    break 
+                except discord.Forbidden:
+                    pass
+            else:
+                try:
+                    view = RetryMesaView(bot, mesa_id, rodada['nome'], mesa['nome'], players)
+                    await member.send(
+                        f"⚠️ **Aviso de Choque de Horários:** A **{mesa['nome']}** fechou os votos, mas...\n"
+                        f"Os horários marcados por eles não deram 'Match' em dia e horário nenhum.\n\n"
+                        f"**Respostas isoladas:**\n{resumo}\n\n"
+                        f"Clique no botão abaixo para iniciar uma **revotação** — os jogadores receberão novos links "
+                        f"e poderão ver os horários dos adversários no calendário!",
+                        view=view
+                    )
+                    break 
+                except discord.Forbidden:
+                    pass
         logger.info(f"Mesa {mesa_id} aguardando decisao do admin.")

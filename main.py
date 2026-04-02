@@ -74,15 +74,24 @@ async def pagina_disponibilidade(token: str):
 
 @app.post("/disponibilidade/{token}")
 async def salvar_disponibilidade(token: str, payload: DisponibilidadePayload):
+    # Log básico pra debug
+    logger.info(f"POST /disponibilidade/{token[:6]}... (slots={len(payload.slots)})")
+
     info = db.get_token(token)
     if not info:
-        raise HTTPException(404, "Link inválido ou já utilizado.")
+        logger.warning(f"Tentativa de votar com token inválido/usado: {token[:6]}...")
+        raise HTTPException(404, "Link inválido ou já utilizado. Verifique seu DM por um novo link.")
 
     if not payload.slots:
         raise HTTPException(400, "Selecione pelo menos um horário.")
 
-    db.salvar_disponibilidade(info["discord_id"], info["mesa_id"], payload.slots)
-    db.marcar_token_usado(token)
+    try:
+        db.salvar_disponibilidade(info["discord_id"], info["mesa_id"], payload.slots)
+        db.marcar_token_usado(token)
+        logger.info(f"Voto salvo com sucesso: player={info['discord_id']} mesa={info['mesa_id']}")
+    except Exception as e:
+        logger.error(f"Erro ao salvar disponibilidade no banco: {e}")
+        raise HTTPException(500, "Erro interno ao salvar. Tente novamente.")
 
     # Dispara verificação de horário em background
     if "bot_loop" in globals() and bot_loop:
@@ -293,23 +302,37 @@ function buildCal(){{
 
 async function confirmar(){{
   const btn=document.getElementById('confirmBtn');
+  const toast=document.getElementById('toast');
+  const errorDiv=document.getElementById('error');
+  
   btn.disabled=true;
   btn.textContent='Enviando...';
+  toast.style.display='none';
+  errorDiv.style.display='none';
+
   try{{
     const r=await fetch('/disponibilidade/'+TOKEN,{{
       method:'POST',
       headers:{{'Content-Type':'application/json'}},
       body:JSON.stringify({{slots:[...selected]}})
     }});
+    
+    const data = await r.json().catch(()=>({{}}));
+
     if(r.ok){{
-      document.getElementById('toast').style.display='block';
-      document.getElementById('error').style.display='none';
+      toast.style.display='block';
       btn.textContent='Enviado ✓';
     }}else{{
-      throw new Error('server error');
+      errorDiv.textContent = r.status === 404 
+        ? '❌ Link expirado ou já utilizado. Verifique seu DM por um novo link.' 
+        : '❌ Erro no servidor (' + (data.detail || 'tente novamente') + ')';
+      errorDiv.style.display='block';
+      btn.disabled=false;
+      btn.textContent='Confirmar disponibilidade';
     }}
   }}catch(e){{
-    document.getElementById('error').style.display='block';
+    errorDiv.textContent = '❌ Falha na conexão. Verifique sua internet.';
+    errorDiv.style.display='block';
     btn.disabled=false;
     btn.textContent='Confirmar disponibilidade';
   }}

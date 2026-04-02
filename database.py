@@ -7,6 +7,11 @@ DB_PATH = os.getenv("DB_PATH", "magic.db")
 
 class Database:
     def __init__(self):
+        # Garantir que o diretório do banco existe (importante para Volumes no Railway)
+        db_dir = os.path.dirname(os.path.abspath(DB_PATH))
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+            
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")

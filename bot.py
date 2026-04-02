@@ -68,20 +68,29 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
             super().__init__(placeholder="Selecione a rodada para esta mesa...", options=options)
 
         async def callback(self, interaction: discord.Interaction):
-            rodada_id = int(self.values[0])
-            rodada = db.get_rodada(rodada_id)
-            
-            # Auto-gerar nome da mesa baseado no contador atual da rodada
-            mesas = db.get_mesas_rodada(rodada_id)
-            proxima_num = len(mesas) + 1
-            mesa_nome = f"Mesa {proxima_num}"
+            await interaction.response.defer(ephemeral=True)
+            try:
+                rodada_id = int(self.values[0])
+                rodada = db.get_rodada(rodada_id)
+                
+                if not rodada:
+                    await interaction.followup.send("❌ Erro: Rodada não encontrada no banco de dados.", ephemeral=True)
+                    return
 
-            await interaction.response.send_message(
-                f"🤝 **Criando {mesa_nome}** em **{rodada['nome']}**\n"
-                f"👇 Use o menu abaixo para selecionar os jogadores (2 a 4 players):",
-                view=SeletorPlayersView(rodada_id, mesa_nome, bot),
-                ephemeral=True
-            )
+                # Auto-gerar nome da mesa baseado no contador atual da rodada
+                mesas = db.get_mesas_rodada(rodada_id)
+                proxima_num = len(mesas) + 1
+                mesa_nome = f"Mesa {proxima_num}"
+
+                await interaction.followup.send(
+                    f"🤝 **Criando {mesa_nome}** em **{rodada['nome']}**\n"
+                    f"👇 Use o menu abaixo para selecionar os jogadores (2 a 4 players):",
+                    view=SeletorPlayersView(rodada_id, mesa_nome, bot),
+                    ephemeral=True
+                )
+            except Exception as e:
+                logger.error(f"Erro ao selecionar rodada para mesa: {e}")
+                await interaction.followup.send("❌ Ocorreu um erro interno ao processar sua escolha.", ephemeral=True)
 
     class SeletorRodadaCriacaoView(discord.ui.View):
         def __init__(self, rodadas):

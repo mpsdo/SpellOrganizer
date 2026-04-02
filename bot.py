@@ -95,7 +95,7 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
             self.mesa_nome = mesa_nome
             self.bot_instance = bot_instance
             
-            self.user_select = discord.ui.UserSelect(
+            self.user_select = discord.ui.MemberSelect(
                 placeholder="Selecione os jogadores da mesa...",
                 min_values=2,
                 max_values=4

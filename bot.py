@@ -56,69 +56,78 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
                 ephemeral=True
             )
 
-    class MesaModal(discord.ui.Modal, title="Criar Nova Mesa"):
+    class MesaInputsModal(discord.ui.Modal, title="Informações da Mesa"):
         rodada_id = discord.ui.TextInput(label="ID da Rodada", placeholder="Ex: 1", max_length=5)
-        nome = discord.ui.TextInput(label="Nome da Mesa", placeholder="Ex: Mesa 1")
-        players = discord.ui.TextInput(label="Jogadores (Marque com @)", style=discord.TextStyle.paragraph, placeholder="@Player1 @Player2")
+        mesa_nome = discord.ui.TextInput(label="Nome da Mesa", placeholder="Ex: Mesa 1", max_length=50)
 
         async def on_submit(self, interaction: discord.Interaction):
-            await interaction.response.defer(ephemeral=True)
-
-            player_ids = extrair_players(interaction.guild, self.players.value)
-            if len(player_ids) < 2:
-                await interaction.followup.send(f"❌ Encontrei menos de 2 jogadores no servidor usando os nomes informados ({self.players.value}).")
-                return
-
             try:
                 r_id = int(self.rodada_id.value)
             except ValueError:
-                await interaction.followup.send("❌ ID da rodada deve ser um número inteiro.")
+                await interaction.response.send_message("❌ O ID da rodada deve ser um número.", ephemeral=True)
                 return
 
             rodada = db.get_rodada(r_id)
             if not rodada:
-                await interaction.followup.send(f"❌ Rodada `{r_id}` não encontrada.")
+                await interaction.response.send_message("❌ Rodada não encontrada.", ephemeral=True)
                 return
 
-            mesa_id = db.criar_mesa(r_id, self.nome.value, player_ids)
+            await interaction.response.send_message(
+                f"🤝 **Criando {self.mesa_nome.value}** em **{rodada['nome']}**\n"
+                f"👇 Use o menu abaixo para selecionar os jogadores desta mesa (2 a 4 players):",
+                view=SeletorPlayersView(r_id, self.mesa_nome.value, bot),
+                ephemeral=True
+            )
 
-            notificados, falhas = [], []
-            for pid in player_ids:
-                member = interaction.guild.get_member(int(pid))
-                if not member:
-                    falhas.append(pid)
-                    continue
+    class SeletorPlayersView(discord.ui.View):
+        def __init__(self, rodada_id: int, mesa_nome: str, bot_instance):
+            super().__init__(timeout=None)
+            self.rodada_id = rodada_id
+            self.mesa_nome = mesa_nome
+            self.bot_instance = bot_instance
+            
+            self.user_select = discord.ui.UserSelect(
+                placeholder="Selecione os jogadores da mesa...",
+                min_values=2,
+                max_values=4
+            )
+            self.user_select.callback = self.select_callback
+            self.add_item(self.user_select)
 
-                token = db.criar_token(pid, mesa_id, r_id)
+        async def select_callback(self, interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            members = self.user_select.values
+            ids = [str(m.id) for m in members]
+
+            # Criar mesa no banco
+            m_id = db.criar_mesa(self.mesa_nome, self.rodada_id, ids)
+            
+            # Criar tokens e enviar DMs
+            rodada = db.get_rodada(self.rodada_id)
+            base_msg = (
+                f"⚔️ **Magic Tournament — {rodada['nome']}**\n\n"
+                f"Você foi escalado para a **{self.mesa_nome}**!\n"
+                f"Adversários: {', '.join(m.display_name for m in members)}\n\n"
+                f"📅 Período: **{rodada['data_ini']}** até **{rodada['data_fim']}**\n\n"
+                f"Escolha seus horários no calendário:\n"
+            )
+
+            sucesso, falha = [], []
+            for m in members:
+                token = db.criar_token(str(m.id), m_id, self.rodada_id)
                 link = f"{BASE_URL}/disponibilidade/{token}"
-
-                outros = [
-                    interaction.guild.get_member(int(p)).display_name
-                    for p in player_ids
-                    if p != pid and interaction.guild.get_member(int(p))
-                ]
-
                 try:
-                    await member.send(
-                        f"⚔️ **Magic Tournament — {rodada['nome']}**\n\n"
-                        f"Você foi sorteado para a **{self.nome.value}** junto com: **{', '.join(outros)}**\n\n"
-                        f"📅 A rodada vai de **{rodada['data_ini']}** até **{rodada['data_fim']}**\n\n"
-                        f"Marque seus horários disponíveis clicando no link abaixo:\n"
-                        f"🔗 {link}\n\n"
-                        f"_O link é pessoal, não compartilhe com ninguém._"
-                    )
-                    notificados.append(member.display_name)
-                    logger.info(f"DM enviada: player={pid} mesa={mesa_id} token={token}")
-                except discord.Forbidden:
-                    falhas.append(member.display_name)
+                    await m.send(f"{base_msg}🔗 {link}\n\n_O link é pessoal, não compartilhe._")
+                    sucesso.append(m.display_name)
+                except:
+                    falha.append(m.display_name)
 
-            msg = f"✅ **{self.nome.value}** criada na Rodada `{r_id}`!\n"
-            if notificados:
-                msg += f"📨 DM enviada para: {', '.join(notificados)}\n"
-            if falhas:
-                msg += f"⚠️ Falha ao enviar DM para: {', '.join(str(f) for f in falhas)} (privacidade bloqueada)"
+            resumo = f"✅ Mesa **{self.mesa_nome}** criada com sucesso!\n"
+            if sucesso: resumo += f"📨 Links enviados: {', '.join(sucesso)}\n"
+            if falha: resumo += f"⚠️ Falha na DM (privado fechado): {', '.join(falha)}"
+            
+            await interaction.followup.send(resumo, ephemeral=True)
 
-            await interaction.followup.send(msg)
 
     def construir_embed_status(rodada_id: int, guild: discord.Guild) -> discord.Embed | None:
         r = db.get_rodada(rodada_id)
@@ -439,7 +448,7 @@ def create_bot(database: Database, base_url: str) -> commands.Bot:
 
         @discord.ui.button(label="🎴 Criar Mesa", style=discord.ButtonStyle.success, custom_id="btn_nova_mesa", row=0)
         async def btn_mesa(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.send_modal(MesaModal())
+            await interaction.response.send_modal(MesaInputsModal())
 
         @discord.ui.button(label="📊 Status Dinâmico", style=discord.ButtonStyle.secondary, custom_id="btn_status", row=0)
         async def btn_status(self, interaction: discord.Interaction, button: discord.ui.Button):

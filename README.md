@@ -4,8 +4,8 @@ Bot Discord + calendário web para organizar horários de torneios de Magic: The
 
 ## Como funciona
 
-1. Admin usa `/nova_rodada` para criar a rodada com as datas
-2. Admin usa `/nova_mesa` para definir os players de cada mesa
+1. Admin usa `/painel` -> **🏆 Criar Rodada** para definir as datas
+2. Admin usa `/painel` -> **🎴 Criar Mesa** para definir os players de cada mesa
 3. Bot envia DM para cada player com um **link pessoal** do calendário
 4. Player abre o link e marca os horários disponíveis arrastando na grade
 5. Bot cruza automaticamente:

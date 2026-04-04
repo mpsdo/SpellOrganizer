@@ -284,7 +284,16 @@ class PainelView(discord.ui.View):
             return
         await interaction.response.send_message("Selecione a Rodada da mesa:", view=SeletorRodadaEdicaoView(rodadas, self.bot), ephemeral=True)
 
+    @discord.ui.button(label="📝 Editar Rodada", style=discord.ButtonStyle.secondary, row=1)
+    async def btn_editar_rodada(self, interaction: discord.Interaction, button: discord.ui.Button):
+        rodadas = db.get_todas_rodadas()
+        if not rodadas:
+            await interaction.response.send_message("❌ Nenhuma rodada ativa.", ephemeral=True)
+            return
+        await interaction.response.send_message("Selecione a rodada para EDITAR:", view=SeletorRodadaEdicaoGeralView(rodadas), ephemeral=True)
+
     @discord.ui.button(label="☢️ NUCLEAR RESET", style=discord.ButtonStyle.danger, row=1)
+
     async def btn_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("🚫 Apenas admins.", ephemeral=True)
@@ -295,7 +304,46 @@ class PainelView(discord.ui.View):
 
 # ─── NOVAS CLASSES DE EDIÇÃO ───
 
+class RodadaEditModal(discord.ui.Modal):
+    def __init__(self, rodada_id, nome_padrao, ini_padrao, fim_padrao):
+        super().__init__(title="Editar Rodada")
+        self.rodada_id = rodada_id
+        self.nome = discord.ui.TextInput(label="Nome da rodada", default=nome_padrao)
+        self.data_ini = discord.ui.TextInput(label="Data Início", default=ini_padrao)
+        self.data_fim = discord.ui.TextInput(label="Data Fim", default=fim_padrao)
+        self.add_item(self.nome)
+        self.add_item(self.data_ini)
+        self.add_item(self.data_fim)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        db.editar_rodada(self.rodada_id, self.nome.value, self.data_ini.value, self.data_fim.value)
+        await interaction.response.send_message(
+            f"✅ **Rodada '{self.nome.value}' atualizada!**\n"
+            f"📅 Novo período: **{self.data_ini.value}** até **{self.data_fim.value}**\n\n"
+            f"Os links dos jogadores que ainda não votaram refletirão as novas datas automaticamente.",
+            ephemeral=True
+        )
+
+class SeletorRodadaEdicaoGeralSelect(discord.ui.Select):
+    def __init__(self, rodadas):
+        options = [discord.SelectOption(label=r['nome'], value=str(r['id'])) for r in rodadas]
+        super().__init__(placeholder="Escolha a rodada para editar...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        rodada_id = int(self.values[0])
+        r = db.get_rodada(rodada_id)
+        if not r:
+            await interaction.response.send_message("❌ Rodada não encontrada.", ephemeral=True)
+            return
+        await interaction.response.send_modal(RodadaEditModal(rodada_id, r['nome'], r['data_ini'], r['data_fim']))
+
+class SeletorRodadaEdicaoGeralView(discord.ui.View):
+    def __init__(self, rodadas):
+        super().__init__(timeout=None)
+        self.add_item(SeletorRodadaEdicaoGeralSelect(rodadas))
+
 class SeletorRodadaEdicaoSelect(discord.ui.Select):
+
     def __init__(self, rodadas, bot_instance):
         self.bot_instance = bot_instance
         options = [discord.SelectOption(label=r['nome'], value=str(r['id'])) for r in rodadas]

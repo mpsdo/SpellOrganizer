@@ -83,18 +83,24 @@ No dashboard do Railway, configure as variáveis de ambiente:
 
 | Comando | Permissão | Descrição |
 |---|---|---|
-| `/nova_rodada nome data_ini data_fim` | Admin | Cria uma rodada com período |
-| `/nova_mesa rodada_id nome players` | Admin | Cria mesa e envia DM com link do calendário |
-| `/status_rodada rodada_id` | Qualquer um | Mostra quem já respondeu |
-| `/reenviar_link rodada_id player` | Admin | Reenvia o link para um player específico |
+| `/painel` | Admin | Abre o painel administrativo com todas as funções |
+
+No **Painel**, você encontra:
+- 🏆 **Criar Rodada**: Define nome e período (ex: 30/03 a 05/04)
+- 📝 **Editar Rodada**: Altera nome ou datas de uma rodada existente
+- 🎴 **Criar Mesa**: Seleciona os players (2 a 4) para uma rodada
+- 📊 **Status Dinâmico**: Acompanha quem já votou e permite **"Cutucar Atrasados"** (reenviar links)
+- 👥 **Editar Jogadores**: Adiciona ou remove players de mesas ativas
+- ☢️ **NUCLEAR RESET**: Limpa todo o banco de dados (Cuidado!)
+
+---
 
 ### Exemplo de uso semanal
 
-```
-/nova_rodada nome:Rodada5 data_ini:30/03 data_fim:05/04
-/nova_mesa rodada_id:1 nome:Mesa1 players:@Mukekah @Andrio @Pedro
-/nova_mesa rodada_id:1 nome:Mesa2 players:@Tiago @Rafael @Lucas
-```
+1. `/painel` -> **Criar Rodada** (ID será gerado)
+2. `/painel` -> **Criar Mesa** -> Selecione a rodada e os jogadores
+3. O Bot envia as DMs automaticamente.
+4. Acompanhe em **Status Dinâmico**.
 
 ---
 

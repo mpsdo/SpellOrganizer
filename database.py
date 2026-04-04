@@ -185,7 +185,15 @@ class Database:
         self.conn.execute("UPDATE tokens SET usado=1 WHERE token=?", (token,))
         self.conn.commit()
 
-    # ── Editar Mesa ───────────────────────────────────────────────────────────
+    # ── Editar Rodada ─────────────────────────────────────────────────────────
+
+    def editar_rodada(self, rodada_id: int, nome: str, data_ini: str, data_fim: str):
+        self.conn.execute(
+            "UPDATE rodadas SET nome=?, data_ini=?, data_fim=? WHERE id=?",
+            (nome, data_ini, data_fim, rodada_id)
+        )
+        self.conn.commit()
+
 
     def adicionar_player_mesa(self, mesa_id: int, discord_id: str):
         self.conn.execute(

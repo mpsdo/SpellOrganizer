@@ -232,7 +232,8 @@ function buildCal(){{
     const [dF,mF]='{data_fim}'.split('/').map(Number);
     baseFim = new Date(ano, mF-1, dF);
     if(baseFim < base) baseFim.setFullYear(ano+1);
-    numDays = Math.min(Math.max(Math.ceil((baseFim - base) / 86400000) + 1, 1), 14);
+    numDays = Math.min(Math.max(Math.ceil((baseFim - base) / 86400000) + 1, 1), 31);
+
   }}
 
   const dates=[];
